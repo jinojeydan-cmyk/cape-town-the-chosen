@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cape Town: The Chosen - 2D Action Platformer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #090511;
+      color: #fff;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #game-container {
+      position: relative;
+      width: 100%;
+      max-width: 1100px;
+      aspect-ratio: 16/9;
+      background: #000;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+    #preloader {
+      position: absolute;
+      inset: 0;
+      background: #0d0716;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      transition: opacity 0.3s;
+    }
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 4px solid rgba(16, 185, 129, 0.2);
+      border-top-color: #10b981;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .bar-bg {
+      width: 240px;
+      height: 8px;
+      background: #1f1430;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #10b981;
+      transition: width 0.2s;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <div id="preloader">
+      <div class="spinner"></div>
+      <h2 style="color: #34d399; font-size: 20px; letter-spacing: 2px;">CAPE TOWN: THE CHOSEN</h2>
+      <p style="color: #9ca3af; font-size: 13px; margin-top: 4px;">Загрузка спрайтов...</p>
+      <div class="bar-bg"><div class="bar-fill" id="load-bar"></div></div>
+    </div>
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+  </div>
+
+  <script>
+    // --- 1. ПОДКЛЮЧЕНИЕ АССЕТОВ ЧЕРЕЗ PROMISE.ALL ---
+    const assetSources = {
+      bg: 'bg_table_mountain.png',
+      playerIdleRun: 'elahim_idle_run.png',
+      playerJumpAttack: 'elahim_jump_attack.png',
+      vfx: 'elahim_vfx_projectiles.png',
+      enemy: 'enemy_smog_drone.png',
+      tileset: 'tileset_relic_forest.png'
+    };
+
+    const assets = {};
+    let loadedCount = 0;
+    const totalAssets = Object.keys(assetSources).length;
+    const bar = document.getElementById('load-bar');
+
+    function loadImg(key, src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          assets[key] = img;
+          loadedCount++;
+          bar.style.width = Math.round((loadedCount / totalAssets) * 100) + '%';
+          resolve(img);
+        };
+        img.onerror = () => {
+          // Fallback if needed
+          img.src = '/public/' + src;
+        };
+        img.src = src;
+      });
+    }
+
+    Promise.all(Object.entries(assetSources).map(([k, s]) => loadImg(k, s)))
+      .then(() => {
+        const preloader = document.getElementById('preloader');
+        preloader.style.opacity = '0';
+        setTimeout(() => preloader.style.display = 'none', 300);
+        startGame();
+      })
+      .catch(err => console.error("Ошибка загрузки:", err));
+
+    // --- 2. ИГРОВОЙ ДВИЖОК CANVAS ---
+    function startGame() {
+      const canvas = document.getElementById('gameCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+
+      // Управление
+      const keys = {};
+      window.addEventListener('keydown', e => { keys[e.code] = true; });
+      window.addEventListener('keyup', e => { keys[e.code] = false; });
+      canvas.addEventListener('mousedown', () => { keys['KeyJ'] = true; setTimeout(() => keys['KeyJ'] = false, 100); });
+
+      // Мир
+      const worldWidth = 2600;
+      let cameraX = 0;
+
+      // Платформы
+      const platforms = [
+        { x: 0, y: 470, w: worldWidth, h: 70, isGround: true },
+        { x: 260, y: 380, w: 220, h: 26 },
+        { x: 560, y: 290, w: 264, h: 26 },
+        { x: 880, y: 210, w: 220, h: 26 },
+        { x: 1180, y: 350, w: 264, h: 26 },
+        { x: 1520, y: 250, w: 308, h: 26 },
+        { x: 1880, y: 360, w: 220, h: 26 },
+        { x: 2200, y: 270, w: 264, h: 26 }
+      ];
+
+      let checkpointX = 100;
+
+      // Игрок (Элахим)
+      const player = {
+        x: checkpointX,
+        y: 470,
+        vx: 0,
+        vy: 0,
+        facingLeft: false,
+        onGround: true,
+        isAttacking: false,
+        attackTimer: 0,
+        animFrame: 0,
+        animTimer: 0,
+        health: 5,
+        jumpsLeft: 2
+      };
+      let prevJump = false;
+
+      // Снаряды и враги
+      const projectiles = [];
+      const bursts = [];
+      const drones = [
+        { x: 340, y: 330, baseY: 330, w: 48, h: 48, vx: 70, minX: 270, maxX: 460, hp: 2, animFrame: 0, animTimer: 0 },
+        { x: 670, y: 240, baseY: 240, w: 48, h: 48, vx: 80, minX: 590, maxX: 800, hp: 2, animFrame: 1, animTimer: 0 },
+        { x: 1020, y: 160, baseY: 160, w: 48, h: 48, vx: 75, minX: 930, maxX: 1140, hp: 2, animFrame: 2, animTimer: 0 },
+        { x: 1380, y: 300, baseY: 300, w: 48, h: 48, vx: 90, minX: 1290, maxX: 1520, hp: 2, animFrame: 3, animTimer: 0 },
+        { x: 1750, y: 210, baseY: 210, w: 48, h: 48, vx: 85, minX: 1650, maxX: 1900, hp: 2, animFrame: 0, animTimer: 0 }
+      ];
+
+      let lastTime = performance.now();
+      let score = 0;
+
+      function update(dt) {
+        // Движение
+        const moveLeft = keys['KeyA'] || keys['ArrowLeft'];
+        const moveRight = keys['KeyD'] || keys['ArrowRight'];
+        const jump = keys['KeyW'] || keys['ArrowUp'] || keys['Space'];
+        const shoot = keys['KeyJ'] || keys['KeyZ'];
+
+        if (moveLeft && !moveRight) {
+          player.vx = Math.max(player.vx - 1400 * dt, -240);
+          player.facingLeft = true;
+        } else if (moveRight && !moveLeft) {
+          player.vx = Math.min(player.vx + 1400 * dt, 240);
+          player.facingLeft = false;
+        } else {
+          player.vx *= Math.pow(0.82, dt * 60);
+          if (Math.abs(player.vx) < 5) player.vx = 0;
+        }
+
+        // Прыжок с поддержкой двойного прыжка
+        const jumpJustPressed = jump && !prevJump;
+        prevJump = !!jump;
+
+        if (player.onGround) {
+          player.jumpsLeft = 2;
+        }
+
+        if (jumpJustPressed) {
+          if (player.onGround) {
+            player.vy = -490;
+            player.onGround = false;
+            player.jumpsLeft--;
+          } else if (player.jumpsLeft === 1) {
+            player.vy = -430;
+            player.jumpsLeft--;
+          }
+        }
+
+        // Гравитация
+        player.vy += 1050 * dt;
+        const prevY = player.y;
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+        player.x = Math.max(20, Math.min(worldWidth - 20, player.x));
+
+        // Коллизия с платформами
+        player.onGround = false;
+        for (const plat of platforms) {
+          if (player.x >= plat.x - 10 && player.x <= plat.x + plat.w + 10) {
+            if (prevY <= plat.y && player.y >= plat.y && player.vy >= 0) {
+              player.y = plat.y;
+              player.vy = 0;
+              player.onGround = true;
+              player.jumpsLeft = 2;
+              break;
+            }
+          }
+        }
+        if (player.y >= 470) {
+          player.y = 470;
+          player.vy = 0;
+          player.onGround = true;
+          player.jumpsLeft = 2;
+        }
+
+        // Стрельба
+        if (shoot && !player.isAttacking) {
+          player.isAttacking = true;
+          player.attackTimer = 0.25;
+          const dir = player.facingLeft ? -1 : 1;
+          projectiles.push({
+            x: player.x + dir * 24,
+            y: player.y - 32,
+            vx: dir * 400, // 400 px/s скорость по ТЗ
+            w: 22,
+            h: 14,
+            lifetime: 2.5
+          });
+        }
+        if (player.isAttacking) {
+          player.attackTimer -= dt;
+          if (player.attackTimer <= 0) player.isAttacking = false;
+        }
+
+        // Анимация
+        player.animTimer += dt;
+        if (player.animTimer >= 0.1) {
+          player.animTimer = 0;
+          player.animFrame = (player.animFrame + 1) % 6;
+        }
+
+        // Снаряды
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+          const p = projectiles[i];
+          p.x += p.vx * dt;
+          p.lifetime -= dt;
+
+          let hit = false;
+          for (let d = 0; d < drones.length; d++) {
+            const drone = drones[d];
+            if (Math.abs(p.x - drone.x) < 26 && Math.abs(p.y - drone.y) < 26) {
+              hit = true;
+              drone.hp--;
+              bursts.push({ x: p.x, y: p.y, frame: 0, timer: 0 });
+              if (drone.hp <= 0) {
+                score += 100;
+                drones.splice(d, 1);
+              }
+              break;
+            }
+          }
+
+          if (hit || p.lifetime <= 0 || p.x < 0 || p.x > worldWidth) {
+            projectiles.splice(i, 1);
+          }
+        }
+
+        // Дроны
+        for (const drone of drones) {
+          drone.x += drone.vx * dt;
+          if (drone.x > drone.maxX) { drone.x = drone.maxX; drone.vx = -Math.abs(drone.vx); }
+          else if (drone.x < drone.minX) { drone.x = drone.minX; drone.vx = Math.abs(drone.vx); }
+          drone.y = drone.baseY + Math.sin(performance.now() * 0.003 + drone.x) * 10;
+          drone.animTimer += dt;
+          if (drone.animTimer >= 0.12) {
+            drone.animTimer = 0;
+            drone.animFrame = (drone.animFrame + 1) % 6;
+          }
+        }
+
+        // Взрывы
+        for (let i = bursts.length - 1; i >= 0; i--) {
+          const b = bursts[i];
+          b.timer += dt;
+          if (b.timer >= 0.06) {
+            b.timer = 0;
+            b.frame++;
+            if (b.frame >= 5) bursts.splice(i, 1);
+          }
+        }
+
+        // Чекпоинт Sanctuary
+        if (player.x > 1520 && checkpointX < 1520) {
+          checkpointX = 1520;
+        }
+
+        // Камера
+        cameraX += (player.x - canvas.width * 0.4 - cameraX) * 0.1;
+        cameraX = Math.max(0, Math.min(worldWidth - canvas.width, cameraX));
+      }
+
+      function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Параллакс фон (Столовая Гора)
+        const bgW = assets.bg.width;
+        const bgH = assets.bg.height;
+        const bgScale = canvas.height / bgH;
+        const drawBgW = bgW * bgScale;
+        const bgOffset = (cameraX * 0.24) % drawBgW;
+        for (let bx = -bgOffset; bx < canvas.width; bx += drawBgW) {
+          ctx.drawImage(assets.bg, 0, 0, bgW, bgH, bx, 0, drawBgW, canvas.height);
+        }
+
+        ctx.save();
+        ctx.translate(-Math.round(cameraX), 0);
+
+        // 2. Платформы из тайлсета
+        for (const p of platforms) {
+          if (p.isGround) {
+            // Темная сплошная основа почвы (без травы внутри толщи земли)
+            ctx.fillStyle = '#1a1512';
+            ctx.fillRect(Math.floor(p.x), Math.floor(p.y + 24), Math.ceil(p.w) + 1, canvas.height - (p.y + 24));
+
+            const deepTileSize = 44;
+            const startX = Math.floor(Math.max(p.x, cameraX - deepTileSize) / deepTileSize) * deepTileSize;
+            const endX = Math.min(p.x + p.w, cameraX + canvas.width + deepTileSize);
+
+            // Текстура скалы и глубокой земли (ряд 7 тайлсета, sx=88, sy=308, sw=44, sh=44 - 0% травы!)
+            for (let px = startX; px < endX; px += deepTileSize) {
+              const drawW = Math.min(deepTileSize, p.x + p.w - px);
+              if (drawW <= 0) continue;
+              for (let py = p.y + 26; py < canvas.height; py += deepTileSize) {
+                const drawH = Math.min(deepTileSize, canvas.height - py);
+                ctx.drawImage(
+                  assets.tileset,
+                  88,
+                  308,
+                  drawW - 1,
+                  drawH,
+                  px,
+                  py,
+                  drawW,
+                  drawH
+                );
+              }
+            }
+
+            // Ровно один верхний слой с травой (Top-edge, sx=88, sy=0, sw=44, sh=26)
+            for (let px = startX; px < endX; px += deepTileSize) {
+              const drawW = Math.min(deepTileSize, p.x + p.w - px);
+              if (drawW <= 0) continue;
+              ctx.drawImage(
+                assets.tileset,
+                88,
+                0,
+                drawW - 1,
+                26,
+                px,
+                p.y,
+                drawW,
+                26
+              );
+            }
+          } else {
+            // Цельные подвесные платформы без швов и без травы на нижней кромке
+            const capW = 22;
+            const midTileW = 44;
+            const platH = 26;
+
+            // Нижняя темная подложка
+            ctx.fillStyle = '#140f0c';
+            ctx.fillRect(Math.floor(p.x + 2), Math.floor(p.y + platH - 3), Math.ceil(p.w - 4) + 1, 4);
+
+            // Левый край (sx=132, sy=46, sw=22, sh=26)
+            ctx.drawImage(
+              assets.tileset,
+              132,
+              46,
+              capW - 1,
+              platH,
+              p.x,
+              p.y,
+              capW,
+              platH
+            );
+
+            // Повторяющаяся середина (sx=88, sy=0, sw=44, sh=26)
+            for (let px = p.x + capW; px < p.x + p.w - capW; px += midTileW) {
+              const segW = Math.min(midTileW, p.x + p.w - capW - px);
+              ctx.drawImage(
+                assets.tileset,
+                88,
+                0,
+                segW - 1,
+                platH,
+                px,
+                p.y,
+                segW,
+                platH
+              );
+            }
+
+            // Правый край (sx=176, sy=46, sw=22, sh=26)
+            ctx.drawImage(
+              assets.tileset,
+              176,
+              46,
+              capW - 1,
+              platH,
+              p.x + p.w - capW,
+              p.y,
+              capW,
+              platH
+            );
+          }
+        }
+
+        // 3. Дроны (48x48px, сетка 6 колонок)
+        const droneFW = assets.enemy.width / 6;
+        const droneFH = assets.enemy.height / 2;
+        for (const drone of drones) {
+          ctx.save();
+          ctx.translate(Math.round(drone.x), Math.round(drone.y));
+          if (drone.vx < 0) ctx.scale(-1, 1);
+          ctx.drawImage(assets.enemy, drone.animFrame * droneFW, 0, droneFW, droneFH, -24, -24, 48, 48);
+          ctx.restore();
+        }
+
+        // 4. Снаряды листьев (~20x12px)
+        for (const p of projectiles) {
+          ctx.save();
+          ctx.translate(Math.round(p.x), Math.round(p.y));
+          if (p.vx < 0) ctx.scale(-1, 1);
+          ctx.drawImage(assets.vfx, 122, 8, 85, 75, -11, -7, 22, 14);
+          ctx.restore();
+        }
+
+        // 5. Вспышки урона (Impact burst)
+        const burstFrames = [135, 225, 330, 440, 555];
+        for (const b of bursts) {
+          const sX = burstFrames[Math.min(b.frame, 4)];
+          ctx.drawImage(assets.vfx, sX, 96, 80, 80, Math.round(b.x - 20), Math.round(b.y - 20), 40, 40);
+        }
+
+        // 6. Персонаж Элахим (ровно 64px в высоту)
+        const pFW = assets.playerIdleRun.width / 6;
+        const pFH = assets.playerIdleRun.height / 2;
+        const pAspect = pFW / pFH;
+        const dh = 64;
+        const dw = Math.round(64 * pAspect);
+
+        ctx.save();
+        ctx.translate(Math.round(player.x), Math.round(player.y));
+        if (player.facingLeft) ctx.scale(-1, 1);
+
+        if (player.isAttacking) {
+          ctx.drawImage(assets.playerJumpAttack, 2 * pFW, pFH, pFW, pFH, -dw / 2, -dh, dw, dh);
+        } else if (!player.onGround) {
+          ctx.drawImage(assets.playerJumpAttack, 2 * pFW, 0, pFW, pFH, -dw / 2, -dh, dw, dh);
+        } else if (Math.abs(player.vx) > 10) {
+          ctx.drawImage(assets.playerIdleRun, player.animFrame * pFW, pFH, pFW, pFH, -dw / 2, -dh, dw, dh);
+        } else {
+          ctx.drawImage(assets.playerIdleRun, player.animFrame * pFW, 0, pFW, pFH, -dw / 2, -dh, dw, dh);
+        }
+        ctx.restore();
+
+        ctx.restore(); // Сброс камеры
+
+        // HUD
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillText(`Счет: ${score}`, 20, 30);
+        ctx.fillText(`Дроны: ${drones.length}`, 20, 54);
+      }
+
+      function gameLoop(now) {
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+        update(dt);
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      requestAnimationFrame(gameLoop);
+    }
+  </script>
+</body>
+</html>

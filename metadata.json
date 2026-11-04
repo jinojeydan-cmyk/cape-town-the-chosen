@@ -1,0 +1,6 @@
+{
+  "name": "Cape Town: The Chosen",
+  "description": "2D action-platformer featuring Elahim defending Table Mountain against cyber-smog drones with leaf projectiles.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
