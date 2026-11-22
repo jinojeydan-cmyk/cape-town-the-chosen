@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, lazy, Suspense } from 'react';
 import { Volume2, VolumeX, Pause, Play, RotateCcw, Shield, Sparkles, Trophy, ArrowRight, FlaskConical, Gem } from 'lucide-react';
-import GameTest from './GameTest';
+import { DEV_MODE } from './dev';
+
+// Тестовая Phaser-сцена грузится лениво: в обычной игре (и в production-бандле) её код не попадает.
+const GameTest = lazy(() => import('./GameTest'));
 
 // --- Sound Synthesizer (Zero External Dependencies) ---
 class SoundFX {
@@ -2030,7 +2033,11 @@ export default function App() {
   };
 
   if (testMode) {
-    return <GameTest onBack={() => setTestMode(false)} />;
+    return (
+      <Suspense fallback={<div className="w-screen h-screen bg-[#0a0612] flex items-center justify-center text-emerald-300 text-sm">Loading test scene…</div>}>
+        <GameTest onBack={() => setTestMode(false)} />
+      </Suspense>
+    );
   }
 
   return (
@@ -2171,13 +2178,15 @@ export default function App() {
                 >
                   <Pause className="w-4 h-4" />
                 </button>
-                <button
-                  onClick={() => setTestMode(true)}
-                  title="Test in Phaser 3"
-                  className="p-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 hover:text-emerald-100 transition border border-emerald-500/30"
-                >
-                  <FlaskConical className="w-4 h-4" />
-                </button>
+                {DEV_MODE && (
+                  <button
+                    onClick={() => setTestMode(true)}
+                    title="Test in Phaser 3"
+                    className="p-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 hover:text-emerald-100 transition border border-emerald-500/30"
+                  >
+                    <FlaskConical className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2211,14 +2220,18 @@ export default function App() {
 
               <div className="text-xs text-zinc-400 tracking-wide flex items-center gap-3">
                 <span>Press <kbd className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-200">Space</kbd> or <kbd className="px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-200">Enter</kbd> to begin</span>
-                <span className="text-zinc-600">|</span>
-                <button
-                  onClick={() => setTestMode(true)}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 underline font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <FlaskConical className="w-3.5 h-3.5" />
-                  <span>Launch Phaser 3 Tile Seam Test</span>
-                </button>
+                {DEV_MODE && (
+                  <>
+                    <span className="text-zinc-600">|</span>
+                    <button
+                      onClick={() => setTestMode(true)}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 underline font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <FlaskConical className="w-3.5 h-3.5" />
+                      <span>Launch Phaser 3 Tile Seam Test</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
